@@ -1,0 +1,8 @@
+export PS1='\[\e[1;35m\][\[\e[1;33m\]\u@\h\[\] \A \[\]\[\e[1;36m\]\w\[\e[1;35m\]]\[\e[1;32m\]\n$ \[\e[0m\]'
+alias l='ls -lh'
+alias les='less -S'
+alias condaon='source ~/.condaon.sh'
+alias condaoff='conda deactivate'
+alias mambaon='source ~/.condaon.sh'
+alias mambaout='conda deactivate'
+export PATH=/opt/software/qsub:$PATH
