@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""
+Fake systemctl shim for containers without systemd.
+Handles exactly what cryochamber calls:
+  systemctl --user daemon-reload
+  systemctl --user enable --now <label>
+  systemctl --user disable --now <label>
+  systemctl --user stop <label>
+  systemctl --user is-active <label>
+"""
+import sys, os, subprocess, shlex
+from pathlib import Path
+
+UNIT_DIR = Path.home() / ".config/systemd/user"
+PID_DIR  = Path.home() / ".config/systemd/pids"
+PID_DIR.mkdir(parents=True, exist_ok=True)
+
+# Strip --user and --now flags to get clean command + label
+args = [a for a in sys.argv[1:] if a not in ("--user", "--now")]
+if not args:
+    sys.exit(0)
+
+cmd   = args[0]
+label = args[-1] if len(args) > 1 else ""
+
+
+def parse_unit(label):
+    unit_file = UNIT_DIR / f"{label}.service"
+    if not unit_file.exists():
+        print(f"fake-systemctl: unit not found: {unit_file}", file=sys.stderr)
+        sys.exit(1)
+    conf = {}
+    for line in unit_file.read_text().splitlines():
+        if "=" in line and not line.startswith("[") and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            conf[k.strip()] = v.strip()
+    return conf
+
+
+def start(label):
+    conf     = parse_unit(label)
+    cmd_args = shlex.split(conf.get("ExecStart", ""))
+    work_dir = conf.get("WorkingDirectory", ".")
+    env_val  = conf.get("Environment", "")
+    log_path = conf.get("StandardOutput", "/tmp/cryo.log").removeprefix("append:")
+
+    env = os.environ.copy()
+    if env_val.startswith("PATH="):
+        env["PATH"] = env_val[5:]
+
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(log_path, "a") as log:
+        proc = subprocess.Popen(
+            cmd_args, cwd=work_dir, env=env,
+            stdout=log, stderr=log,
+            start_new_session=True,
+        )
+    (PID_DIR / f"{label}.pid").write_text(str(proc.pid))
+    print(f"fake-systemctl: started {label} (pid {proc.pid})")
+
+
+def stop(label):
+    pid_file = PID_DIR / f"{label}.pid"
+    if pid_file.exists():
+        pid = int(pid_file.read_text().strip())
+        try:
+            os.kill(pid, 15)
+            print(f"fake-systemctl: stopped {label} (pid {pid})")
+        except ProcessLookupError:
+            pass
+        pid_file.unlink(missing_ok=True)
+
+
+if   cmd == "daemon-reload":  sys.exit(0)
+elif cmd == "enable":         start(label); sys.exit(0)
+elif cmd in ("disable","stop"): stop(label); sys.exit(0)
+elif cmd == "is-active":
+    pid_file = PID_DIR / f"{label}.pid"
+    if pid_file.exists():
+        try:
+            os.kill(int(pid_file.read_text().strip()), 0)
+            print("active"); sys.exit(0)
+        except ProcessLookupError:
+            pass
+    print("inactive"); sys.exit(3)
+else:
+    print(f"fake-systemctl: unsupported: {' '.join(sys.argv[1:])}", file=sys.stderr)
+    sys.exit(1)
